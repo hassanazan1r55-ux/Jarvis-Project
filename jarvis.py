@@ -6,14 +6,15 @@ import threading
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-sys.path.append(os.path.join(os.path.dirname(__file__), 'modules'))
+# Add the current directory to path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from system import SystemManager
-from browser import BrowserManager
-from ai import AIManager
+# Now import from modules
+from modules.system import SystemManager
+from modules.browser import BrowserManager
+from modules.ai import AIManager
 
 try:
     import pyttsx3
@@ -30,25 +31,31 @@ except:
 class Jarvis:
     def __init__(self):
         print("""
-    ╔════════════════════════════════════════╗
-    ║     🚀 JARVIS AI ASSISTANT v3.0       ║
-    ║     Voice Mode Active                  ║
-    ║     Say "Jarvis" to activate          ║
-    ╚════════════════════════════════════════╝
+    ╔═══════════════════════════════════════════════╗
+    ║     🚀 JARVIS AI ASSISTANT v5.0              ║
+    ║     Natural Conversation Flow                 ║
+    ║     Say "Jarvis" + command                   ║
+    ╚═══════════════════════════════════════════════╝
         """)
         
         # Check for .env file
         if not os.path.exists('.env'):
-            print("⚠️ WARNING: .env file not found!")
-            print("   Create .env file with: OPENROUTER_API_KEY=your_key_here")
-            print("   Get key from: https://openrouter.ai/keys\n")
+            print("⚠️ WARNING: .env file not found!\n")
         
         # Load config
-        with open('config.json', 'r') as f:
-            self.config = json.load(f)
+        try:
+            with open('config.json', 'r') as f:
+                self.config = json.load(f)
+        except FileNotFoundError:
+            print("❌ config.json not found! Creating default...")
+            self.config = self._create_default_config()
         
+        # Set user name
         self.user_name = self.config.get('USER_NAME', 'Boss')
         self.is_listening = False
+        self.conversation_active = False
+        self.processing = False
+        self.waiting_for_command = False  # New: waiting state
         
         # Initialize managers
         self.system = SystemManager()
@@ -58,24 +65,38 @@ class Jarvis:
         # Voice engine setup
         self.engine = None
         if VOICE_AVAILABLE:
-            self.engine = pyttsx3.init()
-            self.engine.setProperty('rate', self.config.get('VOICE_SPEED', 175))
-            self.engine.setProperty('volume', self.config.get('VOICE_VOLUME', 0.9))
-            
-            # Set voice
-            voices = self.engine.getProperty('voices')
-            if voices and self.config.get('VOICE_GENDER') == 'female':
-                self.engine.setProperty('voice', voices[1].id)
-            elif voices:
-                self.engine.setProperty('voice', voices[0].id)
+            try:
+                self.engine = pyttsx3.init()
+                self.engine.setProperty('rate', 170)  # Normal speed
+                self.engine.setProperty('volume', 0.9)
+                
+                voices = self.engine.getProperty('voices')
+                if voices and self.config.get('VOICE_GENDER') == 'female':
+                    self.engine.setProperty('voice', voices[1].id)
+                elif voices:
+                    self.engine.setProperty('voice', voices[0].id)
+            except Exception as e:
+                print(f"⚠️ Voice engine error: {e}")
+                self.engine = None
         
-        # Microphone setup
+        # Microphone setup - Balanced
         self.recognizer = None
         if MIC_AVAILABLE:
-            self.recognizer = sr.Recognizer()
-            self.recognizer.energy_threshold = 300
-            self.recognizer.dynamic_energy_threshold = True
-            self.recognizer.pause_threshold = 0.8
+            try:
+                self.recognizer = sr.Recognizer()
+                # BALANCED SETTINGS
+                self.recognizer.energy_threshold = 350
+                self.recognizer.dynamic_energy_threshold = True
+                self.recognizer.dynamic_energy_adjustment_damping = 0.1
+                self.recognizer.dynamic_energy_ratio = 1.5
+                self.recognizer.pause_threshold = 0.5  # Normal pause
+                self.recognizer.phrase_threshold = 0.3
+                self.recognizer.non_speaking_duration = 0.3
+                
+                print("✅ Microphone configured for natural conversation!")
+            except Exception as e:
+                print(f"⚠️ Microphone error: {e}")
+                self.recognizer = None
         
         self.running = True
         self.log_file = 'logs/history.log'
@@ -83,32 +104,81 @@ class Jarvis:
         
         self.log("JARVIS Started")
         print("✅ JARVIS is ready!")
-        print("🎤 Say 'Jarvis' to wake me up...")
+        print("🎤 Say 'Jarvis' + command (e.g., 'Jarvis what's the time')")
+        print("💬 Or say 'Start Conversation' for continuous mode\n")
+    
+    def _create_default_config(self):
+        """Create default config if not exists"""
+        default_config = {
+            "USER_NAME": "Boss",
+            "VOICE_SPEED": 170,
+            "VOICE_VOLUME": 0.9,
+            "VOICE_GENDER": "male",
+            "OPENROUTER_MODEL": "openai/gpt-3.5-turbo",
+            "MAX_TOKENS": 200,
+            "TEMPERATURE": 0.7,
+            "MAX_HISTORY": 10,
+            "BROWSER_PATH": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+            "APPS": {
+                "notepad": "notepad.exe",
+                "calculator": "calc.exe",
+                "chrome": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+                "word": "winword.exe",
+                "excel": "excel.exe",
+                "spotify": "spotify.exe",
+                "vscode": "code.exe",
+                "paint": "mspaint.exe",
+                "cmd": "cmd.exe",
+                "edge": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
+            },
+            "WEBSITES": {
+                "google": "https://www.google.com",
+                "youtube": "https://www.youtube.com",
+                "github": "https://www.github.com",
+                "gmail": "https://mail.google.com",
+                "stackoverflow": "https://stackoverflow.com",
+                "chatgpt": "https://chat.openai.com"
+            }
+        }
+        with open('config.json', 'w') as f:
+            json.dump(default_config, f, indent=4)
+        print("✅ Default config.json created!")
+        return default_config
     
     def speak(self, text):
-        """Speak with voice"""
+        """Speak naturally"""
         print(f"🤖 JARVIS: {text}")
         if self.engine:
             try:
                 self.engine.say(text)
                 self.engine.runAndWait()
-            except:
-                pass
+            except Exception as e:
+                print(f"⚠️ Speak error: {e}")
     
     def log(self, message):
         """Log activities"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(self.log_file, 'a', encoding='utf-8') as f:
-            f.write(f"[{timestamp}] {message}\n")
+        try:
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                f.write(f"[{timestamp}] {message}\n")
+        except:
+            pass
     
     def greet(self):
         """Greeting on startup"""
-        greeting = self.ai.get_greeting()
-        self.speak(greeting)
-        self.speak("Say Jarvis whenever you need me")
+        try:
+            greeting = self.ai.get_greeting()
+            self.speak(greeting)
+            self.speak("Say Jarvis and your command, or start a conversation!")
+        except Exception as e:
+            self.speak(f"Hello! I'm JARVIS. How can I help?")
+            print(f"⚠️ Greeting error: {e}")
     
     def execute_action(self, action):
         """Execute system actions"""
+        if not action:
+            return False
+        
         action_lower = action.lower()
         
         # Time
@@ -132,7 +202,7 @@ class Jarvis:
                     self.speak(result)
                     self.log(f"Opened: {app}")
                     return True
-            self.speak("I didn't recognize which app to open")
+            self.speak("I don't know that app")
             return True
         
         # Close apps
@@ -143,7 +213,7 @@ class Jarvis:
                     self.speak(result)
                     self.log(f"Closed: {app}")
                     return True
-            self.speak("I didn't recognize which app to close")
+            self.speak("I don't know that app")
             return True
         
         # Screenshot
@@ -155,183 +225,282 @@ class Jarvis:
         
         # System status
         elif 'status' in action_lower or 'battery' in action_lower:
-            status = self.system.get_system_status()
-            bat = status['battery']
-            status_msg = f"Battery at {bat['percent']} percent, {'charging' if bat['plugged'] else 'on battery'}"
-            status_msg += f". CPU at {status['cpu']} percent, RAM at {status['ram']} percent"
-            self.speak(status_msg)
-            self.log("System status checked")
+            try:
+                status = self.system.get_system_status()
+                bat = status['battery']
+                status_msg = f"Battery at {bat['percent']} percent, {'charging' if bat['plugged'] else 'on battery'}"
+                self.speak(status_msg)
+                self.log("System status checked")
+            except:
+                self.speak("Unable to get system status")
             return True
         
         # Shutdown
         elif 'shutdown' in action_lower:
-            self.speak("Shutting down system in 10 seconds. Goodbye boss!")
+            self.speak("Shutting down in 10 seconds. Goodbye boss!")
             self.log("Shutdown initiated")
-            time.sleep(2)
-            os.system("shutdown /s /t 10")
             self.running = False
+            time.sleep(2)
+            try:
+                os.system("shutdown /s /t 10")
+            except:
+                pass
             return True
         
         # Restart
         elif 'restart' in action_lower or 'reboot' in action_lower:
-            self.speak("Restarting system in 10 seconds")
+            self.speak("Restarting in 10 seconds")
             self.log("Restart initiated")
-            time.sleep(2)
-            os.system("shutdown /r /t 10")
             self.running = False
+            time.sleep(2)
+            try:
+                os.system("shutdown /r /t 10")
+            except:
+                pass
             return True
         
         # Lock
         elif 'lock' in action_lower:
-            self.system.lock_system()
-            self.speak("System locked")
-            self.log("System locked")
+            try:
+                self.system.lock_system()
+                self.speak("System locked")
+                self.log("System locked")
+            except:
+                self.speak("Unable to lock system")
             return True
         
         # Google Search
         elif 'search' in action_lower:
             query = action_lower.replace('search', '').strip()
             if query:
-                result = self.browser.search_google(query)
-                self.speak(result)
-                self.log(f"Searched: {query}")
+                try:
+                    result = self.browser.search_google(query)
+                    self.speak(result)
+                    self.log(f"Searched: {query}")
+                except:
+                    self.speak("Unable to search")
                 return True
         
         # YouTube
         elif 'youtube' in action_lower:
             query = action_lower.replace('youtube', '').strip()
             if query:
-                result = self.browser.search_youtube(query)
-                self.speak(result)
-                self.log(f"YouTube: {query}")
+                try:
+                    result = self.browser.search_youtube(query)
+                    self.speak(result)
+                    self.log(f"YouTube: {query}")
+                except:
+                    self.speak("Unable to open YouTube")
                 return True
         
         # Open Website
-        elif 'open' in action_lower:
+        elif 'open website' in action_lower or 'go to' in action_lower:
             for site in ['google', 'youtube', 'github', 'gmail', 'stackoverflow', 'chatgpt']:
                 if site in action_lower:
-                    result = self.browser.open_website(site)
-                    self.speak(result)
-                    self.log(f"Opened website: {site}")
+                    try:
+                        result = self.browser.open_website(site)
+                        self.speak(result)
+                        self.log(f"Opened website: {site}")
+                    except:
+                        self.speak(f"Unable to open {site}")
                     return True
         
         return False
     
-    def listen_continuously(self):
-        """Listen for wake word and commands"""
-        if not MIC_AVAILABLE:
-            self.speak("Microphone not available")
-            return
-        
-        with sr.Microphone() as source:
-            self.recognizer.adjust_for_ambient_noise(source, duration=1)
-            print("🎤 Listening for 'Jarvis'...")
-            
-            while self.running:
-                try:
-                    # Listen for wake word
-                    audio = self.recognizer.listen(source, timeout=10, phrase_time_limit=5)
-                    print("🔄 Processing...")
-                    
-                    try:
-                        text = self.recognizer.recognize_google(audio, language='en-US')
-                        print(f"📝 Heard: {text}")
-                        
-                        # Check for wake word
-                        if 'jarvis' in text.lower():
-                            self.speak("Yes boss? How can I help you?")
-                            self.is_listening = True
-                            
-                            # Listen for actual command
-                            try:
-                                command_audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=10)
-                                command_text = self.recognizer.recognize_google(command_audio, language='en-US')
-                                print(f"📝 Command: {command_text}")
-                                self.log(f"Voice command: {command_text}")
-                                
-                                # Process the command
-                                self.process_command(command_text.lower())
-                                
-                            except sr.WaitTimeoutError:
-                                self.speak("I didn't hear a command")
-                            except sr.UnknownValueError:
-                                self.speak("I didn't understand that")
-                            except Exception as e:
-                                self.speak(f"Error processing command")
-                            
-                            self.is_listening = False
-                        
-                        # Direct commands without wake word (for quick access)
-                        elif any(word in text.lower() for word in ['open', 'search', 'time', 'date', 'status']):
-                            self.process_command(text.lower())
-                            self.log(f"Direct command: {text}")
-                    
-                    except sr.UnknownValueError:
-                        pass  # Silent ignore
-                    except sr.RequestError:
-                        pass
-                    
-                except sr.WaitTimeoutError:
-                    continue
-                except Exception as e:
-                    print(f"Error: {e}")
-                    continue
-    
     def process_command(self, command):
-        """Process command with AI"""
+        """Process command with proper flow"""
         if not command:
             return
         
+        if self.processing:
+            return
+        
+        self.processing = True
+        command = command.strip().lower()
         self.log(f"Processing: {command}")
         
-        # Special commands
-        if 'exit' in command or 'goodbye' in command or 'quit' in command:
-            self.speak(self.ai.get_farewell())
-            self.log("Shutdown by user")
-            self.running = False
+        try:
+            # Check for conversation mode toggle
+            if 'start conversation' in command:
+                self.conversation_active = True
+                self.speak("Starting continuous conversation mode. Just talk to me naturally!")
+                self.processing = False
+                return
+            
+            if 'stop conversation' in command or 'end conversation' in command:
+                self.conversation_active = False
+                self.speak("Exiting continuous conversation mode")
+                self.processing = False
+                return
+            
+            # If in conversation mode
+            if self.conversation_active:
+                # Check for exit
+                if 'exit' in command or 'goodbye' in command:
+                    self.speak(self.ai.get_farewell())
+                    self.conversation_active = False
+                    self.processing = False
+                    return
+                
+                # Check for joke/motivation
+                if 'joke' in command or 'funny' in command:
+                    joke = self.ai.tell_joke()
+                    self.speak(joke)
+                    self.processing = False
+                    return
+                
+                if 'motivate' in command or 'quote' in command:
+                    quote = self.ai.get_motivation()
+                    self.speak(quote)
+                    self.processing = False
+                    return
+                
+                # Try system action
+                if self.execute_action(command):
+                    self.processing = False
+                    return
+                
+                # Use AI for conversation
+                self.speak("Let me think about that...")
+                ai_response = self.ai.process_command(command)
+                extracted = self.ai.extract_command(ai_response)
+                
+                if extracted['type'] == 'action':
+                    self.speak(extracted['response'])
+                    self.execute_action(extracted['action'])
+                else:
+                    self.speak(extracted['response'])
+                self.processing = False
+                return
+            
+            # Normal mode
+            if 'exit' in command or 'goodbye' in command:
+                self.speak(self.ai.get_farewell())
+                self.running = False
+                self.processing = False
+                return
+            
+            # Check for joke/motivation
+            if 'joke' in command:
+                joke = self.ai.tell_joke()
+                self.speak(joke)
+                self.processing = False
+                return
+            
+            if 'motivate' in command or 'quote' in command:
+                quote = self.ai.get_motivation()
+                self.speak(quote)
+                self.processing = False
+                return
+            
+            # Try system action
+            if self.execute_action(command):
+                self.processing = False
+                return
+            
+            # Use AI
+            self.speak("Let me think about that...")
+            ai_response = self.ai.process_command(command)
+            extracted = self.ai.extract_command(ai_response)
+            
+            if extracted['type'] == 'action':
+                self.speak(extracted['response'])
+                self.execute_action(extracted['action'])
+            else:
+                self.speak(extracted['response'])
+                
+        except Exception as e:
+            self.speak("Sorry, something went wrong")
+            self.log(f"Error: {e}")
+        finally:
+            self.processing = False
+    
+    def listen_continuously(self):
+        """Natural conversation flow with proper timing"""
+        if not MIC_AVAILABLE or not self.recognizer:
+            self.speak("Microphone not available")
+            print("❌ Microphone not available!")
             return
         
-        # Check for joke/motivation
-        if 'joke' in command or 'funny' in command:
-            joke = self.ai.tell_joke()
-            self.speak(joke)
-            return
-        
-        if 'motivate' in command or 'quote' in command:
-            quote = self.ai.get_motivation()
-            self.speak(quote)
-            return
-        
-        # Try to execute as system command first
-        executed = self.execute_action(command)
-        if executed:
-            return
-        
-        # If not a system command, send to AI
-        self.speak("Let me think about that...")
-        ai_response = self.ai.process_command(command)
-        
-        # Extract if AI wants to execute something
-        extracted = self.ai.extract_command(ai_response)
-        
-        if extracted['type'] == 'action':
-            # AI wants to execute
-            self.speak(extracted['response'])
-            self.execute_action(extracted['action'])
-        else:
-            # Just speak AI response
-            self.speak(extracted['response'])
+        try:
+            with sr.Microphone() as source:
+                print("🎤 Calibrating microphone...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=1)
+                print("🎤 Ready! Listening for commands...")
+                print("="*50)
+                
+                while self.running:
+                    try:
+                        if self.processing:
+                            time.sleep(0.1)
+                            continue
+                        
+                        # Listen with proper timeout
+                        audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=8)
+                        
+                        try:
+                            text = self.recognizer.recognize_google(audio, language='en-US')
+                            print(f"👤 You: {text}")
+                            
+                            # Check for wake word
+                            if 'jarvis' in text.lower():
+                                # Remove "jarvis" from command
+                                clean_command = text.lower().replace('jarvis', '').strip()
+                                
+                                if clean_command:
+                                    # Has command with wake word
+                                    self.process_command(clean_command)
+                                else:
+                                    # Only "jarvis" - wait for command
+                                    self.speak("Yes boss? How can I help you?")
+                                    
+                                    # Listen for command
+                                    try:
+                                        cmd_audio = self.recognizer.listen(source, timeout=4, phrase_time_limit=8)
+                                        cmd_text = self.recognizer.recognize_google(cmd_audio, language='en-US')
+                                        print(f"👤 Command: {cmd_text}")
+                                        self.process_command(cmd_text.lower())
+                                    except sr.WaitTimeoutError:
+                                        self.speak("I didn't catch that. Say again?")
+                                    except sr.UnknownValueError:
+                                        self.speak("I didn't understand that")
+                            
+                            # If in conversation mode, process without wake word
+                            elif self.conversation_active:
+                                self.process_command(text.lower())
+                            
+                            # Direct commands for quick actions
+                            elif any(word in text.lower() for word in ['open', 'search', 'time', 'date', 'status']):
+                                self.process_command(text.lower())
+                        
+                        except sr.UnknownValueError:
+                            # Silently ignore unclear speech
+                            pass
+                        except sr.RequestError:
+                            print("⚠️ Network error")
+                            time.sleep(1)
+                        
+                    except sr.WaitTimeoutError:
+                        # No speech detected, continue listening
+                        continue
+                    except Exception as e:
+                        print(f"⚠️ Error: {e}")
+                        continue
+                        
+        except Exception as e:
+            print(f"❌ Microphone error: {e}")
+            self.speak("Microphone error. Please check your settings.")
     
     def run_voice_mode(self):
         """Main voice mode loop"""
-        self.greet()
-        
         try:
+            self.greet()
             self.listen_continuously()
         except KeyboardInterrupt:
-            self.speak("Shutting down. Goodbye boss!")
+            print("\n👋 Shutting down...")
+            self.speak("Goodbye boss!")
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"❌ Error: {e}")
             self.speak("An error occurred. Restarting...")
 
 if __name__ == "__main__":
@@ -342,5 +511,8 @@ if __name__ == "__main__":
         print("\n👋 JARVIS shut down")
     except Exception as e:
         print(f"❌ Fatal Error: {e}")
-        with open('logs/error.log', 'a') as f:
-            f.write(f"{datetime.now()}: {str(e)}\n")
+        try:
+            with open('logs/error.log', 'a') as f:
+                f.write(f"{datetime.now()}: {str(e)}\n")
+        except:
+            pass
