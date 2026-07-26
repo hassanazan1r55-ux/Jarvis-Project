@@ -29,10 +29,9 @@ class Jarvis:
     def __init__(self):
         print("""
     ╔═══════════════════════════════════════════════╗
-    ║     🚀 JARVIS AI ASSISTANT v7.0              ║
-    ║     SIMPLE & RELIABLE VOICE ENGINE           ║
-    ║     No C++ - Pure Python                     ║
-    ║     Works Every Time!                        ║
+    ║     🚀 JARVIS AI ASSISTANT v7.2              ║
+    ║     IMPROVED COMMAND PARSING                 ║
+    ║     Say "AI" + command                      ║
     ╚═══════════════════════════════════════════════╝
         """)
         
@@ -46,6 +45,13 @@ class Jarvis:
             self.config = self._create_default_config()
         
         self.user_name = self.config.get('USER_NAME', 'Boss')
+        
+        # ============================================
+        # 🔥 WAKE WORD - CHANGE HERE!
+        # ============================================
+        self.WAKE_WORD = "ai"  # Options: "ai", "jar", "jay", "hey"
+        # ============================================
+        
         self.conversation_active = False
         self.processing = False
         
@@ -63,18 +69,14 @@ class Jarvis:
             except:
                 pass
         
-        # ============================================
-        # 🎤 SIMPLE MICROPHONE SETUP
-        # ============================================
+        # Microphone setup
         self.recognizer = None
         self.microphone = None
         
         if MIC_AVAILABLE:
             try:
                 self.recognizer = sr.Recognizer()
-                
-                # Simple & Working Settings
-                self.recognizer.energy_threshold = 4000  # Higher = less noise
+                self.recognizer.energy_threshold = 4000
                 self.recognizer.dynamic_energy_threshold = True
                 self.recognizer.pause_threshold = 0.8
                 
@@ -86,6 +88,7 @@ class Jarvis:
                 
                 print(f"✅ Microphone ready!")
                 print(f"   Energy threshold: {self.recognizer.energy_threshold:.0f}")
+                print(f"   Wake Word: '{self.WAKE_WORD}'")
                 
             except Exception as e:
                 print(f"⚠️ Microphone error: {e}")
@@ -97,8 +100,8 @@ class Jarvis:
         
         self.log("JARVIS Started")
         print("\n✅ JARVIS is ready!")
-        print("🎤 Say 'Jarvis' + command")
-        print("💡 Speak slowly and clearly")
+        print(f"🎤 Say '{self.WAKE_WORD}' + command")
+        print(f"💡 Examples: '{self.WAKE_WORD} time', '{self.WAKE_WORD} open chrome'")
         print("="*50)
     
     def _create_default_config(self):
@@ -111,6 +114,7 @@ class Jarvis:
             "MAX_TOKENS": 200,
             "TEMPERATURE": 0.7,
             "MAX_HISTORY": 10,
+            "WAKE_WORD": "ai",
             "APPS": {
                 "notepad": "notepad.exe",
                 "calculator": "calc.exe",
@@ -154,7 +158,7 @@ class Jarvis:
         try:
             greeting = self.ai.get_greeting()
             self.speak(greeting)
-            self.speak("Say Jarvis and your command!")
+            self.speak(f"Say {self.WAKE_WORD} and your command!")
         except:
             self.speak("Hello! I'm JARVIS.")
     
@@ -163,40 +167,65 @@ class Jarvis:
             return False
         
         action_lower = action.lower()
+        self.log(f"Executing: {action_lower}")
         
+        # ============================================
+        # 🔥 IMPROVED COMMAND PARSING
+        # ============================================
+        
+        # Time
         if 'time' in action_lower and 'date' not in action_lower:
             time_str = self.system.get_time()
             self.speak(f"The time is {time_str}")
             return True
         
+        # Date
         elif 'date' in action_lower:
             date_str = self.system.get_date()
             self.speak(f"Today is {date_str}")
             return True
         
+        # Open apps
         elif 'open' in action_lower:
+            # Check each app
+            app_found = False
             for app in ['notepad', 'calculator', 'chrome', 'word', 'excel', 'spotify', 'vscode', 'paint', 'cmd']:
                 if app in action_lower:
                     result = self.system.open_app(app)
                     self.speak(result)
-                    return True
-            self.speak("I don't know that app")
+                    app_found = True
+                    break
+            
+            if not app_found:
+                # Try to extract app name
+                words = action_lower.split()
+                for word in words:
+                    if word not in ['open', 'please']:
+                        self.speak(f"I don't know how to open {word}")
+                        break
             return True
         
+        # Close apps
         elif 'close' in action_lower or 'kill' in action_lower:
-            for app in ['notepad', 'chrome', 'word', 'excel', 'spotify']:
+            app_found = False
+            for app in ['notepad', 'chrome', 'word', 'excel', 'spotify', 'vscode']:
                 if app in action_lower:
                     result = self.system.close_app(app)
                     self.speak(result)
-                    return True
-            self.speak("I don't know that app")
+                    app_found = True
+                    break
+            
+            if not app_found:
+                self.speak("I don't know which app to close")
             return True
         
-        elif 'screenshot' in action_lower:
+        # Screenshot
+        elif 'screenshot' in action_lower or 'capture' in action_lower:
             result = self.system.take_screenshot()
             self.speak(result)
             return True
         
+        # System status
         elif 'status' in action_lower or 'battery' in action_lower:
             try:
                 status = self.system.get_system_status()
@@ -206,18 +235,42 @@ class Jarvis:
                 self.speak("Can't get status")
             return True
         
+        # Google Search
         elif 'search' in action_lower:
+            # Extract search query
             query = action_lower.replace('search', '').strip()
+            # Remove common words
+            for word in ['for', 'about', 'please']:
+                query = query.replace(word, '').strip()
+            
             if query:
                 self.browser.search_google(query)
-                self.speak(f"Searching {query}")
+                self.speak(f"Searching for {query}")
+            else:
+                self.speak("What should I search for?")
             return True
         
+        # YouTube
         elif 'youtube' in action_lower:
             query = action_lower.replace('youtube', '').strip()
+            for word in ['play', 'for', 'please']:
+                query = query.replace(word, '').strip()
+            
             if query:
                 self.browser.search_youtube(query)
                 self.speak(f"Playing {query} on YouTube")
+            else:
+                self.speak("What should I play on YouTube?")
+            return True
+        
+        # Joke
+        elif 'joke' in action_lower or 'funny' in action_lower:
+            self.speak(self.ai.tell_joke())
+            return True
+        
+        # Motivation
+        elif 'motivate' in action_lower or 'quote' in action_lower or 'inspire' in action_lower:
+            self.speak(self.ai.get_motivation())
             return True
         
         return False
@@ -231,6 +284,7 @@ class Jarvis:
         self.log(f"Command: {command}")
         
         try:
+            # Conversation mode
             if 'start conversation' in command:
                 self.conversation_active = True
                 self.speak("Continuous mode started!")
@@ -243,20 +297,11 @@ class Jarvis:
                 self.processing = False
                 return
             
+            # If in conversation mode
             if self.conversation_active:
                 if 'exit' in command or 'goodbye' in command:
                     self.speak(self.ai.get_farewell())
                     self.conversation_active = False
-                    self.processing = False
-                    return
-                
-                if 'joke' in command:
-                    self.speak(self.ai.tell_joke())
-                    self.processing = False
-                    return
-                
-                if 'motivate' in command or 'quote' in command:
-                    self.speak(self.ai.get_motivation())
                     self.processing = False
                     return
                 
@@ -276,26 +321,19 @@ class Jarvis:
                 self.processing = False
                 return
             
+            # Normal mode
             if 'exit' in command or 'goodbye' in command:
                 self.speak(self.ai.get_farewell())
                 self.running = False
                 self.processing = False
                 return
             
-            if 'joke' in command:
-                self.speak(self.ai.tell_joke())
-                self.processing = False
-                return
-            
-            if 'motivate' in command or 'quote' in command:
-                self.speak(self.ai.get_motivation())
-                self.processing = False
-                return
-            
+            # Try to execute
             if self.execute_action(command):
                 self.processing = False
                 return
             
+            # If nothing matches, use AI
             self.speak("Thinking...")
             response = self.ai.process_command(command)
             extracted = self.ai.extract_command(response)
@@ -313,15 +351,15 @@ class Jarvis:
             self.processing = False
     
     def listen_continuously(self):
-        """Simple & Reliable Listening"""
+        """Listening with improved command detection"""
         if not self.recognizer or not self.microphone:
             self.speak("Microphone not available")
             return
         
         try:
             with self.microphone as source:
-                print("\n🎤 Listening... Say 'Jarvis' + command")
-                print("💡 Examples: 'Jarvis time', 'Jarvis open chrome'")
+                print(f"\n🎤 Listening... Say '{self.WAKE_WORD}' + command")
+                print(f"💡 Examples: '{self.WAKE_WORD} time', '{self.WAKE_WORD} search Python'")
                 print("💡 Speak slowly and clearly\n")
                 
                 while self.running:
@@ -330,7 +368,6 @@ class Jarvis:
                             time.sleep(0.1)
                             continue
                         
-                        # Listen
                         print("👂", end=" ", flush=True)
                         audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=8)
                         
@@ -338,9 +375,17 @@ class Jarvis:
                             text = self.recognizer.recognize_google(audio, language='en-US')
                             print(f"\n👤 You: {text}")
                             
+                            text_lower = text.lower()
+                            
                             # Check for wake word
-                            if 'jarvis' in text.lower():
-                                clean = text.lower().replace('jarvis', '').strip()
+                            if self.WAKE_WORD in text_lower:
+                                # Remove wake word
+                                clean = text_lower.replace(self.WAKE_WORD, '').strip()
+                                
+                                # Clean extra spaces
+                                while '  ' in clean:
+                                    clean = clean.replace('  ', ' ')
+                                
                                 if clean:
                                     self.speak("Yes?")
                                     self.process_command(clean)
@@ -354,11 +399,12 @@ class Jarvis:
                                     except:
                                         pass
                             
+                            # Direct commands (without wake word)
                             elif self.conversation_active:
-                                self.process_command(text.lower())
+                                self.process_command(text_lower)
                             
-                            elif any(word in text.lower() for word in ['open', 'search', 'time', 'date', 'status']):
-                                self.process_command(text.lower())
+                            elif any(word in text_lower for word in ['open', 'search', 'time', 'date', 'status']):
+                                self.process_command(text_lower)
                         
                         except sr.UnknownValueError:
                             pass
