@@ -1,20 +1,32 @@
-# Environment Variables & Config Secrets
+# Environment variables
 .env
-config.json
+.env.local
+.env.*.local
 
-# Python Cache & Virtual Environments
+# Logs
+logs/
+*.log
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
 venv/
-.venv/
 env/
+ENV/
+.venv
 
-# Logs
-logs/*.log
-
-# IDE & System Files
+# IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+
+# OS
 .DS_Store
 Thumbs.db
+
+# Screenshots
+screenshot_*.png
