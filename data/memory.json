@@ -1,0 +1,12 @@
+{
+    "user_name": "Azan",
+    "user_preferences": {
+        "favorite_apps": [],
+        "default_browser": "chrome",
+        "morning_person": true,
+        "language": "english",
+        "voice_speed": 170
+    },
+    "conversation_context": [],
+    "last_interaction": null
+}

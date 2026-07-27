@@ -1,0 +1,10 @@
+[
+    {
+        "habit": "typing",
+        "time": "11:00 a.m.",
+        "frequency": "daily",
+        "streak": 0,
+        "last_completed": null,
+        "active": true
+    }
+]
