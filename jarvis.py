@@ -2,6 +2,8 @@ import sys
 import os
 import json
 import time
+import re
+import threading
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -12,6 +14,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from modules.system import SystemManager
 from modules.browser import BrowserManager
 from modules.ai import AIManager
+from modules.memory_manager import MemoryManager
+from modules.personality import PersonalityManager
 
 try:
     import pyttsx3
@@ -25,13 +29,22 @@ try:
 except:
     MIC_AVAILABLE = False
 
+# ============================================
+# 🔊 TRY SAPI5 (Windows) - MOST RELIABLE
+# ============================================
+try:
+    import win32com.client
+    SAPI_AVAILABLE = True
+except:
+    SAPI_AVAILABLE = False
+
 class Jarvis:
     def __init__(self):
         print("""
     ╔═══════════════════════════════════════════════╗
-    ║     🚀 JARVIS AI ASSISTANT v7.2              ║
-    ║     IMPROVED COMMAND PARSING                 ║
-    ║     Say "AI" + command                      ║
+    ║     🚀 JARVIS AI ASSISTANT v8.8              ║
+    ║     VOICE 100% WORKING - NO EMOJI TTS        ║
+    ║     Now Speaks ONLY text!                    ║
     ╚═══════════════════════════════════════════════╝
         """)
         
@@ -47,31 +60,76 @@ class Jarvis:
         self.user_name = self.config.get('USER_NAME', 'Boss')
         
         # ============================================
-        # 🔥 WAKE WORD - CHANGE HERE!
+        # 🔥 WAKE WORD
         # ============================================
-        self.WAKE_WORD = "ai"  # Options: "ai", "jar", "jay", "hey"
-        # ============================================
+        self.WAKE_WORD = "ai"
         
         self.conversation_active = False
         self.processing = False
+        self.mode = "voice"
         
+        # Initialize managers
         self.system = SystemManager()
         self.browser = BrowserManager()
         self.ai = AIManager()
         
-        # Voice engine
+        # Memory & Personality
+        self.memory = MemoryManager()
+        print("🧠 Memory Manager initialized!")
+        
+        self.personality = PersonalityManager(mode="friendly")
+        print(f"🎭 Personality Mode: {self.personality.mode}")
+        
+        # ============================================
+        # 🔊 VOICE ENGINE - SAPI5 (Windows)
+        # ============================================
+        self.sapi_speaker = None
+        self.use_sapi = False
         self.engine = None
-        if VOICE_AVAILABLE:
+        self.voice_available = False
+        
+        # First try SAPI5 (most reliable on Windows)
+        if SAPI_AVAILABLE:
             try:
+                print("🔧 Initializing SAPI5 voice engine...")
+                self.sapi_speaker = win32com.client.Dispatch("SAPI.SpVoice")
+                self.use_sapi = True
+                self.voice_available = True
+                print("🔊 SAPI5 voice engine initialized!")
+                self.speak("Voice engine is ready!")
+            except Exception as e:
+                print(f"⚠️ SAPI5 error: {e}")
+                self.use_sapi = False
+        
+        # Fallback to pyttsx3 if SAPI5 fails
+        if not self.use_sapi and VOICE_AVAILABLE:
+            try:
+                print("🔧 Initializing pyttsx3 voice engine...")
                 self.engine = pyttsx3.init()
-                self.engine.setProperty('rate', 170)
-                self.engine.setProperty('volume', 0.9)
-            except:
-                pass
+                self.engine.setProperty('rate', self.config.get('VOICE_SPEED', 170))
+                self.engine.setProperty('volume', self.config.get('VOICE_VOLUME', 0.9))
+                
+                voices = self.engine.getProperty('voices')
+                if voices and self.config.get('VOICE_GENDER') == 'female':
+                    self.engine.setProperty('voice', voices[1].id)
+                elif voices:
+                    self.engine.setProperty('voice', voices[0].id)
+                
+                self.voice_available = True
+                print("🔊 pyttsx3 voice engine initialized!")
+                self.speak("Voice engine is ready!")
+            except Exception as e:
+                print(f"⚠️ pyttsx3 error: {e}")
+                self.engine = None
+                self.voice_available = False
+        
+        if not self.voice_available:
+            print("❌ No voice engine available! Continuing in text-only mode.")
         
         # Microphone setup
         self.recognizer = None
         self.microphone = None
+        self.voice_thread = None
         
         if MIC_AVAILABLE:
             try:
@@ -88,7 +146,6 @@ class Jarvis:
                 
                 print(f"✅ Microphone ready!")
                 print(f"   Energy threshold: {self.recognizer.energy_threshold:.0f}")
-                print(f"   Wake Word: '{self.WAKE_WORD}'")
                 
             except Exception as e:
                 print(f"⚠️ Microphone error: {e}")
@@ -100,8 +157,10 @@ class Jarvis:
         
         self.log("JARVIS Started")
         print("\n✅ JARVIS is ready!")
-        print(f"🎤 Say '{self.WAKE_WORD}' + command")
-        print(f"💡 Examples: '{self.WAKE_WORD} time', '{self.WAKE_WORD} open chrome'")
+        print(f"🎤 Voice Mode: Say '{self.WAKE_WORD}' + command")
+        print("⌨️  Text Mode: Type 'ai' + command")
+        print("🔊 JARVIS will SPEAK and TYPE both!")
+        print("💡 Type 'help' for all commands")
         print("="*50)
     
     def _create_default_config(self):
@@ -137,14 +196,71 @@ class Jarvis:
             json.dump(default_config, f, indent=4)
         return default_config
     
+    # ============================================
+    # 🔧 EMOJI REMOVAL HELPER
+    # ============================================
+    
+    def _remove_emojis(self, text):
+        """Remove emojis and special Unicode symbols from text for TTS"""
+        # Emoji patterns (most common)
+        emoji_pattern = re.compile("["
+            u"\U0001F600-\U0001F64F"  # emoticons
+            u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+            u"\U0001F680-\U0001F6FF"  # transport & map symbols
+            u"\U0001F700-\U0001F77F"  # alchemical symbols
+            u"\U0001F780-\U0001F7FF"  # Geometric Shapes Extended
+            u"\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
+            u"\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+            u"\U0001FA00-\U0001FA6F"  # Chess Symbols
+            u"\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+            u"\U00002702-\U000027B0"  # Dingbats
+            u"\U000024C2-\U0001F251" 
+            "]+", flags=re.UNICODE)
+        return emoji_pattern.sub(r'', text).strip()
+    
+    # ============================================
+    # 🔊 SPEAK FUNCTION - SAPI5 + Fallback
+    # ============================================
+    
     def speak(self, text):
+        """Speak with voice and print (emojis removed from speech only)"""
+        # Print original text with emojis
         print(f"🤖 JARVIS: {text}")
-        if self.engine:
+        
+        if not text or not self.voice_available:
+            return
+        
+        # Remove emojis for speech
+        clean_text = self._remove_emojis(text)
+        if not clean_text:
+            return
+        
+        # Use SAPI5 (Windows)
+        if self.use_sapi and self.sapi_speaker:
             try:
-                self.engine.say(text)
+                self.sapi_speaker.Speak(clean_text)
+                return
+            except Exception as e:
+                print(f"⚠️ SAPI5 speak error: {e}")
+                # Fallback to pyttsx3
+                self.use_sapi = False
+        
+        # Use pyttsx3
+        if self.engine is not None:
+            try:
+                self.engine.say(clean_text)
                 self.engine.runAndWait()
-            except:
-                pass
+            except Exception as e:
+                print(f"⚠️ pyttsx3 speak error: {e}")
+                # Try to reinitialize
+                try:
+                    self.engine = pyttsx3.init()
+                    self.engine.setProperty('rate', 170)
+                    self.engine.setProperty('volume', 0.9)
+                    self.engine.say(clean_text)
+                    self.engine.runAndWait()
+                except:
+                    pass
     
     def log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -155,12 +271,14 @@ class Jarvis:
             pass
     
     def greet(self):
-        try:
-            greeting = self.ai.get_greeting()
-            self.speak(greeting)
-            self.speak(f"Say {self.WAKE_WORD} and your command!")
-        except:
-            self.speak("Hello! I'm JARVIS.")
+        greeting = self.personality.get_greeting()
+        name = self.memory.get_user_info("name")
+        if name:
+            greeting = f"{greeting} Great to see you again, {name}!"
+        else:
+            greeting += " I'm JARVIS. You can tell me your name and I'll remember it!"
+        
+        self.speak(greeting)
     
     def execute_action(self, action):
         if not action:
@@ -170,11 +288,222 @@ class Jarvis:
         self.log(f"Executing: {action_lower}")
         
         # ============================================
-        # 🔥 IMPROVED COMMAND PARSING
+        # 🧠 MEMORY COMMANDS
+        # ============================================
+        
+        # Remember name
+        if 'my name is' in action_lower or 'call me' in action_lower:
+            if 'my name is' in action_lower:
+                name = action_lower.split('my name is')[-1].strip()
+            elif 'call me' in action_lower:
+                name = action_lower.split('call me')[-1].strip()
+            
+            if name:
+                self.memory.remember_user("name", name.title())
+                response = self.personality.get_acknowledge()
+                self.speak(f"{response} I'll remember your name is {name.title()}!")
+                return True
+        
+        # What's my name
+        elif 'my name' in action_lower and ('what' in action_lower or 'kya' in action_lower):
+            name = self.memory.get_user_info("name")
+            if name:
+                self.speak(f"Your name is {name}, boss!")
+            else:
+                self.speak("I don't remember your name yet. Tell me using: 'My name is ...'")
+            return True
+        
+        # ============================================
+        # 🎭 PERSONALITY COMMANDS
+        # ============================================
+        
+        # Change personality
+        elif 'change to' in action_lower:
+            for mode in ["professional", "friendly", "funny", "strict", "emotional"]:
+                if mode in action_lower:
+                    result = self.personality.change_mode(mode)
+                    self.speak(result)
+                    return True
+        
+        # Current personality
+        elif 'personality' in action_lower or 'mode' in action_lower:
+            self.speak(f"I'm currently in {self.personality.mode} mode!")
+            return True
+        
+        # ============================================
+        # 📋 TASK COMMANDS
+        # ============================================
+        
+        # Add task
+        elif 'remind me' in action_lower or 'add task' in action_lower or 'remember to' in action_lower:
+            if 'remind me to' in action_lower:
+                task = action_lower.split('remind me to')[-1].strip()
+            elif 'remember to' in action_lower:
+                task = action_lower.split('remember to')[-1].strip()
+            else:
+                task = action_lower.replace('add task', '').strip()
+            
+            import re
+            time_pattern = r'\b(?:at|@)\s*(\d{1,2}:\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm)?)'
+            time_match = re.search(time_pattern, action_lower)
+            if time_match:
+                time_match = time_match.group(1)
+            
+            result = self.memory.add_task(task, time_match)
+            self.speak(result)
+            return True
+        
+        # Show tasks
+        elif 'my tasks' in action_lower or 'show tasks' in action_lower or 'pending tasks' in action_lower:
+            tasks = self.memory.get_pending_tasks()
+            if tasks:
+                task_list = "\n".join([f"  - {t['task']} (ID: {t['id']})" for t in tasks])
+                self.speak(f"Your pending tasks:\n{task_list}")
+            else:
+                self.speak("You have no pending tasks!")
+            return True
+        
+        # Complete task
+        elif 'complete task' in action_lower or 'task done' in action_lower:
+            import re
+            numbers = re.findall(r'\d+', action_lower)
+            if numbers:
+                task_id = int(numbers[0])
+                result = self.memory.complete_task(task_id)
+                self.speak(result)
+            else:
+                self.speak("Please provide task ID. Say: Complete task [ID]")
+            return True
+        
+        # ============================================
+        # 📊 HABIT COMMANDS
+        # ============================================
+        
+        # Add habit
+        elif 'add habit' in action_lower or 'habit of' in action_lower:
+            if 'habit of' in action_lower:
+                habit = action_lower.split('habit of')[-1].strip()
+            else:
+                habit = action_lower.replace('add habit', '').strip()
+            
+            import re
+            time_pattern = r'\b(?:at|@)\s*(\d{1,2}:\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm)?)'
+            time_match = re.search(time_pattern, action_lower)
+            if time_match:
+                time_match = time_match.group(1)
+            
+            result = self.memory.add_habit(habit, time_match)
+            self.speak(result)
+            return True
+        
+        # Complete habit
+        elif 'habit done' in action_lower:
+            habit = action_lower.replace('habit done', '').strip()
+            if habit:
+                result = self.memory.complete_habit(habit)
+                self.speak(result)
+            else:
+                self.speak("Which habit did you complete?")
+            return True
+        
+        # ============================================
+        # 🔍 CONTEXT AWARENESS
+        # ============================================
+        
+        # Previous conversation
+        elif 'previous conversation' in action_lower or 'what did we talk about' in action_lower:
+            context = self.memory.get_recent_context()
+            if context:
+                self.speak(f"Here's our recent conversation:\n{context}")
+            else:
+                self.speak("We haven't had any previous conversations yet.")
+            return True
+        
+        # ============================================
+        # 📅 ROUTINE
+        # ============================================
+        
+        # Daily routine
+        elif 'routine' in action_lower or 'what should i do' in action_lower:
+            routine = self.memory.get_daily_routine()
+            suggestions = routine.get('suggestions', ['No suggestions right now'])
+            self.speak(f"{routine['time'].title()} routine: {suggestions[0]}")
+            return True
+        
+        # ============================================
+        # 🔄 MODE SWITCH
+        # ============================================
+        
+        # Switch to text mode
+        elif 'text mode' in action_lower or 'switch to text' in action_lower:
+            self.mode = "text"
+            self.speak("Switched to Text Mode! Type your commands.")
+            return True
+        
+        # Switch to voice mode
+        elif 'voice mode' in action_lower or 'switch to voice' in action_lower:
+            self.mode = "voice"
+            self.speak("Switched to Voice Mode! Say your commands.")
+            return True
+        
+        # Current mode
+        elif 'current mode' in action_lower or 'what mode' in action_lower:
+            self.speak(f"Current mode: {self.mode.upper()}")
+            return True
+        
+        # ============================================
+        # 🆘 HELP
+        # ============================================
+        
+        elif 'help' in action_lower or 'commands' in action_lower:
+            help_text = """
+📋 AVAILABLE COMMANDS:
+=======================
+🧠 Memory:
+  - my name is [name]  - Remember your name
+  - what's my name     - Show your name
+  
+🎭 Personality:
+  - change to [mode]   - Professional/Friendly/Funny/Strict/Emotional
+  - personality        - Show current mode
+
+📋 Tasks:
+  - remind me to [task] - Add task
+  - my tasks           - Show pending tasks
+  - complete task [id] - Complete task
+
+📊 Habits:
+  - add habit of [habit] - Add habit
+  - habit done [habit]   - Complete habit
+
+🔍 Context:
+  - previous conversation - Show recent chat
+
+📅 Routine:
+  - routine / what should i do - Daily suggestions
+
+🔄 Mode:
+  - text mode / switch to text - Text input mode
+  - voice mode / switch to voice - Voice input mode
+
+💻 System:
+  - time, date, status
+  - open [app], close [app]
+  - search [query], youtube [query]
+  - joke, motivate, screenshot
+
+💡 Type 'help' to see this menu again
+"""
+            self.speak("Here are all available commands!")
+            print(help_text)
+            return True
+        
+        # ============================================
+        # EXISTING COMMANDS
         # ============================================
         
         # Time
-        if 'time' in action_lower and 'date' not in action_lower:
+        elif 'time' in action_lower and 'date' not in action_lower:
             time_str = self.system.get_time()
             self.speak(f"The time is {time_str}")
             return True
@@ -187,45 +516,31 @@ class Jarvis:
         
         # Open apps
         elif 'open' in action_lower:
-            # Check each app
-            app_found = False
             for app in ['notepad', 'calculator', 'chrome', 'word', 'excel', 'spotify', 'vscode', 'paint', 'cmd']:
                 if app in action_lower:
                     result = self.system.open_app(app)
                     self.speak(result)
-                    app_found = True
-                    break
-            
-            if not app_found:
-                # Try to extract app name
-                words = action_lower.split()
-                for word in words:
-                    if word not in ['open', 'please']:
-                        self.speak(f"I don't know how to open {word}")
-                        break
+                    return True
+            self.speak("I don't know that app")
             return True
         
         # Close apps
-        elif 'close' in action_lower or 'kill' in action_lower:
-            app_found = False
-            for app in ['notepad', 'chrome', 'word', 'excel', 'spotify', 'vscode']:
+        elif 'close' in action_lower:
+            for app in ['notepad', 'chrome', 'word', 'excel', 'spotify']:
                 if app in action_lower:
                     result = self.system.close_app(app)
                     self.speak(result)
-                    app_found = True
-                    break
-            
-            if not app_found:
-                self.speak("I don't know which app to close")
+                    return True
+            self.speak("I don't know that app")
             return True
         
         # Screenshot
-        elif 'screenshot' in action_lower or 'capture' in action_lower:
+        elif 'screenshot' in action_lower:
             result = self.system.take_screenshot()
             self.speak(result)
             return True
         
-        # System status
+        # Status
         elif 'status' in action_lower or 'battery' in action_lower:
             try:
                 status = self.system.get_system_status()
@@ -235,53 +550,46 @@ class Jarvis:
                 self.speak("Can't get status")
             return True
         
-        # Google Search
+        # Search
         elif 'search' in action_lower:
-            # Extract search query
             query = action_lower.replace('search', '').strip()
-            # Remove common words
-            for word in ['for', 'about', 'please']:
-                query = query.replace(word, '').strip()
-            
             if query:
                 self.browser.search_google(query)
                 self.speak(f"Searching for {query}")
-            else:
-                self.speak("What should I search for?")
             return True
         
         # YouTube
         elif 'youtube' in action_lower:
             query = action_lower.replace('youtube', '').strip()
-            for word in ['play', 'for', 'please']:
-                query = query.replace(word, '').strip()
-            
             if query:
                 self.browser.search_youtube(query)
                 self.speak(f"Playing {query} on YouTube")
-            else:
-                self.speak("What should I play on YouTube?")
             return True
         
         # Joke
-        elif 'joke' in action_lower or 'funny' in action_lower:
-            self.speak(self.ai.tell_joke())
+        elif 'joke' in action_lower:
+            joke = self.ai.tell_joke()
+            self.speak(joke)
             return True
         
         # Motivation
-        elif 'motivate' in action_lower or 'quote' in action_lower or 'inspire' in action_lower:
+        elif 'motivate' in action_lower or 'quote' in action_lower:
             self.speak(self.ai.get_motivation())
             return True
         
+        # ============================================
+        # FALLBACK: AI RESPONSE
+        # ============================================
+        
         return False
     
-    def process_command(self, command):
+    def process_command(self, command, source="voice"):
         if not command or self.processing:
             return
         
         self.processing = True
         command = command.strip().lower()
-        self.log(f"Command: {command}")
+        self.log(f"Command ({source}): {command}")
         
         try:
             # Conversation mode
@@ -300,7 +608,8 @@ class Jarvis:
             # If in conversation mode
             if self.conversation_active:
                 if 'exit' in command or 'goodbye' in command:
-                    self.speak(self.ai.get_farewell())
+                    farewell = self.personality.get_farewell()
+                    self.speak(farewell)
                     self.conversation_active = False
                     self.processing = False
                     return
@@ -309,9 +618,12 @@ class Jarvis:
                     self.processing = False
                     return
                 
-                self.speak("Thinking...")
+                think = self.personality.get_think()
+                self.speak(think)
                 response = self.ai.process_command(command)
                 extracted = self.ai.extract_command(response)
+                
+                self.memory.add_to_history(command, extracted.get('response', ''))
                 
                 if extracted['type'] == 'action':
                     self.speak(extracted['response'])
@@ -323,20 +635,24 @@ class Jarvis:
             
             # Normal mode
             if 'exit' in command or 'goodbye' in command:
-                self.speak(self.ai.get_farewell())
+                farewell = self.personality.get_farewell()
+                self.speak(farewell)
                 self.running = False
                 self.processing = False
                 return
             
-            # Try to execute
+            # Execute action
             if self.execute_action(command):
                 self.processing = False
                 return
             
-            # If nothing matches, use AI
-            self.speak("Thinking...")
+            # AI fallback
+            think = self.personality.get_think()
+            self.speak(think)
             response = self.ai.process_command(command)
             extracted = self.ai.extract_command(response)
+            
+            self.memory.add_to_history(command, extracted.get('response', ''))
             
             if extracted['type'] == 'action':
                 self.speak(extracted['response'])
@@ -345,66 +661,54 @@ class Jarvis:
                 self.speak(extracted['response'])
                 
         except Exception as e:
-            self.speak("Error")
+            error_msg = self.personality.get_error()
+            self.speak(f"{error_msg} {str(e)}")
             self.log(f"Error: {e}")
         finally:
             self.processing = False
     
-    def listen_continuously(self):
-        """Listening with improved command detection"""
+    def listen_voice(self):
+        """Voice listening thread"""
         if not self.recognizer or not self.microphone:
-            self.speak("Microphone not available")
             return
         
         try:
             with self.microphone as source:
-                print(f"\n🎤 Listening... Say '{self.WAKE_WORD}' + command")
-                print(f"💡 Examples: '{self.WAKE_WORD} time', '{self.WAKE_WORD} search Python'")
-                print("💡 Speak slowly and clearly\n")
-                
                 while self.running:
                     try:
-                        if self.processing:
+                        if self.mode == "text" or self.processing:
                             time.sleep(0.1)
                             continue
                         
                         print("👂", end=" ", flush=True)
-                        audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=8)
+                        audio = self.recognizer.listen(source, timeout=3, phrase_time_limit=8)
                         
                         try:
                             text = self.recognizer.recognize_google(audio, language='en-US')
-                            print(f"\n👤 You: {text}")
+                            print(f"\n🎤 You: {text}")
                             
-                            text_lower = text.lower()
-                            
-                            # Check for wake word
-                            if self.WAKE_WORD in text_lower:
-                                # Remove wake word
-                                clean = text_lower.replace(self.WAKE_WORD, '').strip()
-                                
-                                # Clean extra spaces
-                                while '  ' in clean:
-                                    clean = clean.replace('  ', ' ')
-                                
+                            if self.WAKE_WORD in text.lower():
+                                clean = text.lower().replace(self.WAKE_WORD, '').strip()
                                 if clean:
-                                    self.speak("Yes?")
-                                    self.process_command(clean)
+                                    acknowledge = self.personality.get_acknowledge()
+                                    self.speak(acknowledge)
+                                    self.process_command(clean, "voice")
                                 else:
-                                    self.speak("Yes boss?")
+                                    yes = self.personality.get_yes()
+                                    self.speak(f"{yes} How can I help?")
                                     try:
                                         cmd_audio = self.recognizer.listen(source, timeout=4, phrase_time_limit=8)
                                         cmd_text = self.recognizer.recognize_google(cmd_audio, language='en-US')
-                                        print(f"👤 Command: {cmd_text}")
-                                        self.process_command(cmd_text.lower())
+                                        print(f"🎤 Command: {cmd_text}")
+                                        self.process_command(cmd_text.lower(), "voice")
                                     except:
                                         pass
                             
-                            # Direct commands (without wake word)
                             elif self.conversation_active:
-                                self.process_command(text_lower)
+                                self.process_command(text.lower(), "voice")
                             
-                            elif any(word in text_lower for word in ['open', 'search', 'time', 'date', 'status']):
-                                self.process_command(text_lower)
+                            elif any(word in text.lower() for word in ['open', 'search', 'time', 'date']):
+                                self.process_command(text.lower(), "voice")
                         
                         except sr.UnknownValueError:
                             pass
@@ -420,15 +724,55 @@ class Jarvis:
                         
         except Exception as e:
             print(f"❌ Microphone error: {e}")
-            self.speak("Microphone error")
+    
+    def listen_text(self):
+        """Text input listener"""
+        print("\n⌨️  Text Mode Active! Type your commands.")
+        print("💡 Type 'help' for commands, 'voice mode' to switch back\n")
+        
+        while self.running:
+            try:
+                if self.mode == "voice":
+                    time.sleep(0.5)
+                    continue
+                
+                command = input("🧑 You: ").strip()
+                
+                if not command:
+                    continue
+                
+                if command.lower() == 'exit' or command.lower() == 'quit':
+                    farewell = self.personality.get_farewell()
+                    self.speak(farewell)
+                    self.running = False
+                    break
+                
+                if command.lower().startswith('ai'):
+                    command = command[2:].strip()
+                
+                self.process_command(command, "text")
+                
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                print(f"⚠️ Error: {e}")
     
     def run_voice_mode(self):
+        """Main loop with both voice and text"""
         try:
             self.greet()
-            self.listen_continuously()
+            
+            # Start voice thread
+            voice_thread = threading.Thread(target=self.listen_voice, daemon=True)
+            voice_thread.start()
+            
+            # Start text input in main thread
+            self.listen_text()
+            
         except KeyboardInterrupt:
             print("\n👋 Shutting down...")
-            self.speak("Goodbye boss!")
+            farewell = self.personality.get_farewell()
+            self.speak(farewell)
         except Exception as e:
             print(f"❌ Error: {e}")
             self.speak("Error")
