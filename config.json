@@ -1,13 +1,15 @@
 {
     "USER_NAME": "Boss",
-    "VOICE_SPEED": 175,
+    "VOICE_SPEED": 170,
     "VOICE_VOLUME": 0.9,
     "VOICE_GENDER": "male",
     "OPENROUTER_MODEL": "openai/gpt-3.5-turbo",
     "MAX_TOKENS": 200,
     "TEMPERATURE": 0.7,
-    "MAX_HISTORY": 6,
-    "BROWSER_PATH": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    "MAX_HISTORY": 10,
+    "WAKE_WORD": "ai",
+    "FACE_RECOGNITION": true,
+    "DEFAULT_CITY": "Karachi",
     "APPS": {
         "notepad": "notepad.exe",
         "calculator": "calc.exe",
@@ -17,15 +19,12 @@
         "spotify": "spotify.exe",
         "vscode": "code.exe",
         "paint": "mspaint.exe",
-        "cmd": "cmd.exe",
-        "edge": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
+        "cmd": "cmd.exe"
     },
     "WEBSITES": {
         "google": "https://www.google.com",
         "youtube": "https://www.youtube.com",
         "github": "https://www.github.com",
-        "gmail": "https://mail.google.com",
-        "stackoverflow": "https://stackoverflow.com",
-        "chatgpt": "https://chat.openai.com"
+        "gmail": "https://mail.google.com"
     }
 }
